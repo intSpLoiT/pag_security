@@ -1,12 +1,9 @@
-# cogs/statistics.py
-
 from __future__ import annotations
 
 import logging
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Optional
 
 import discord
 from discord import app_commands
@@ -30,12 +27,17 @@ class GuildStats:
 class Statistics(commands.Cog):
     """PAG Security statistics and security-status commands."""
 
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
 
-        # PanelService is the canonical configuration source.
-        self.panel = getattr(bot, "panel_service", None)
+        # Bot tarafından oluşturulan merkezi PanelService'i kullan.
+        self.panel: PanelService = getattr(
+            bot,
+            "panel_service",
+            None,
+        )
 
+        # Güvenli fallback.
         if self.panel is None:
             self.panel = PanelService()
 
@@ -56,12 +58,13 @@ class Statistics(commands.Cog):
 
         return stats
 
-    def record(self, guild_id: int, event: str, amount: int = 1) -> None:
-        """Record a runtime security event.
-
-        Other cogs can optionally use:
-            statistics_cog.record(guild.id, "ban")
-        """
+    def record(
+        self,
+        guild_id: int,
+        event: str,
+        amount: int = 1,
+    ) -> None:
+        """Record a runtime security event."""
 
         if not event:
             return
@@ -73,16 +76,20 @@ class Statistics(commands.Cog):
 
         self._get_stats(guild_id).events[event] += amount
 
-    def get_event_count(self, guild_id: int, event: str) -> int:
-        """Return the recorded count for an event."""
+    def get_event_count(
+        self,
+        guild_id: int,
+        event: str,
+    ) -> int:
         return self._get_stats(guild_id).events.get(event, 0)
 
-    def get_all_event_counts(self, guild_id: int) -> dict[str, int]:
-        """Return a copy of all runtime counters."""
+    def get_all_event_counts(
+        self,
+        guild_id: int,
+    ) -> dict[str, int]:
         return dict(self._get_stats(guild_id).events)
 
     def clear_guild(self, guild_id: int) -> None:
-        """Clear runtime statistics for one guild."""
         self._stats.pop(guild_id, None)
 
     def cog_unload(self) -> None:
@@ -92,12 +99,20 @@ class Statistics(commands.Cog):
     # SERVER SNAPSHOT
     # ============================================================
 
-    def _server_snapshot(self, guild: discord.Guild) -> dict[str, int]:
-        """Build a lightweight snapshot from Discord's cached guild data."""
+    @staticmethod
+    def _server_snapshot(
+        guild: discord.Guild,
+    ) -> dict[str, int]:
+        """Create a lightweight snapshot using cached Discord data."""
 
         members = guild.members
 
-        bots = sum(1 for member in members if member.bot)
+        bots = sum(
+            1
+            for member in members
+            if member.bot
+        )
+
         humans = len(members) - bots
 
         text_channels = sum(
@@ -126,14 +141,6 @@ class Statistics(commands.Cog):
             if role.managed
         )
 
-        webhooks = 0
-
-        # Webhooks are intentionally not fetched here.
-        # Fetching them for every statistics request would create
-        # unnecessary API traffic.
-        #
-        # guild.channels / guild.members / guild.roles are cached.
-
         return {
             "members": len(members),
             "humans": humans,
@@ -144,15 +151,14 @@ class Statistics(commands.Cog):
             "categories": categories,
             "roles": roles,
             "managed_roles": managed_roles,
-            "webhooks": webhooks,
         }
 
     # ============================================================
-    # EMBEDS
+    # EMBED
     # ============================================================
 
+    @staticmethod
     def _base_embed(
-        self,
         guild: discord.Guild,
         title: str,
     ) -> discord.Embed:
@@ -165,7 +171,9 @@ class Statistics(commands.Cog):
         if guild.icon:
             embed.set_thumbnail(url=guild.icon.url)
 
-        embed.set_footer(text="PAG Security • Statistics")
+        embed.set_footer(
+            text="PAG Security • Statistics"
+        )
 
         return embed
 
@@ -192,23 +200,29 @@ class Statistics(commands.Cog):
             return
 
         try:
-            config = self.panel.load(guild.id)
+            # PanelService.load() ASYNC olduğu için await gerekli.
+            config = await self.panel.load(guild.id)
+
             snapshot = self._server_snapshot(guild)
             runtime = self._get_stats(guild.id)
+
+            security = config.get("security", {})
+            detection = config.get("detection", {})
+            emergency = config.get("emergency", {})
 
             embed = self._base_embed(
                 guild,
                 "🛡️ PAG Security Statistics",
             )
 
-            security = config.get("security", {})
-            detection = config.get("detection", {})
-            emergency = config.get("emergency", {})
+            enabled = bool(
+                security.get("enabled", True)
+            )
 
-            enabled = bool(security.get("enabled", True))
             smart_detection = bool(
                 security.get("smart_detection", True)
             )
+
             emergency_mode = bool(
                 security.get("emergency_mode", True)
             )
@@ -249,7 +263,7 @@ class Statistics(commands.Cog):
             embed.add_field(
                 name="⚙️ Emergency",
                 value=(
-                    f"**Role Protection:** "
+                    f"**Dangerous Roles:** "
                     f"{'🟢' if emergency.get('remove_dangerous_roles', True) else '🔴'}\n"
                     f"**Lockdown:** "
                     f"{'🟢' if emergency.get('lockdown', True) else '🔴'}\n"
@@ -260,7 +274,6 @@ class Statistics(commands.Cog):
             )
 
             events = runtime.events
-
             total_events = sum(events.values())
 
             embed.add_field(
@@ -269,13 +282,18 @@ class Statistics(commands.Cog):
                     f"**Toplam:** `{total_events}`\n"
                     f"**Kick:** `{events.get('kick', 0)}`\n"
                     f"**Ban:** `{events.get('ban', 0)}`\n"
-                    f"**Kanal:** `{events.get('channel_delete', 0)}`\n"
-                    f"**Rol:** `{events.get('role_delete', 0)}`"
+                    f"**Kanal Silme:** "
+                    f"`{events.get('channel_delete', 0)}`\n"
+                    f"**Rol Silme:** "
+                    f"`{events.get('role_delete', 0)}`"
                 ),
                 inline=False,
             )
 
-            thresholds = detection.get("thresholds", {})
+            thresholds = detection.get(
+                "thresholds",
+                {},
+            )
 
             embed.add_field(
                 name="🎯 Detection Thresholds",
@@ -308,14 +326,21 @@ class Statistics(commands.Cog):
 
         except Exception:
             logger.exception(
-                "Failed to generate security statistics for guild %s",
+                "Failed to generate security statistics "
+                "for guild %s",
                 guild.id,
             )
 
-            await interaction.response.send_message(
-                "❌ İstatistikler oluşturulurken bir hata oluştu.",
-                ephemeral=True,
-            )
+            if interaction.response.is_done():
+                await interaction.followup.send(
+                    "❌ İstatistikler oluşturulurken bir hata oluştu.",
+                    ephemeral=True,
+                )
+            else:
+                await interaction.response.send_message(
+                    "❌ İstatistikler oluşturulurken bir hata oluştu.",
+                    ephemeral=True,
+                )
 
     # ============================================================
     # /security-events
@@ -323,7 +348,7 @@ class Statistics(commands.Cog):
 
     @app_commands.command(
         name="security-events",
-        description="PAG Security runtime olay istatistiklerini gösterir.",
+        description="PAG Security runtime olaylarını gösterir.",
     )
     @app_commands.guild_only()
     @app_commands.default_permissions(
@@ -347,7 +372,7 @@ class Statistics(commands.Cog):
 
             if not events:
                 await interaction.response.send_message(
-                    "📊 Henüz kaydedilmiş bir runtime security eventi yok.",
+                    "📊 Henüz kaydedilmiş bir security eventi yok.",
                     ephemeral=True,
                 )
                 return
@@ -383,7 +408,8 @@ class Statistics(commands.Cog):
 
         except Exception:
             logger.exception(
-                "Failed to generate event statistics for guild %s",
+                "Failed to generate event statistics "
+                "for guild %s",
                 guild.id,
             )
 
@@ -398,7 +424,7 @@ class Statistics(commands.Cog):
 
     @app_commands.command(
         name="server-stats",
-        description="Sunucunun temel yapı istatistiklerini gösterir.",
+        description="Sunucunun temel istatistiklerini gösterir.",
     )
     @app_commands.guild_only()
     async def server_stats(
@@ -459,7 +485,8 @@ class Statistics(commands.Cog):
 
         except Exception:
             logger.exception(
-                "Failed to generate server statistics for guild %s",
+                "Failed to generate server statistics "
+                "for guild %s",
                 guild.id,
             )
 
@@ -470,6 +497,6 @@ class Statistics(commands.Cog):
 
 
 async def setup(bot: commands.Bot) -> None:
-    """Load the statistics cog."""
-
-    await bot.add_cog(Statistics(bot))
+    await bot.add_cog(
+        Statistics(bot)
+    )
